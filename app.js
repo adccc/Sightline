@@ -1,7 +1,6 @@
 const canvas = document.getElementById('stage');
 const stageWrap = document.getElementById('stageWrap');
 const emptyState = document.getElementById('emptyState');
-const hintText = document.getElementById('hintText');
 const imageInput = document.getElementById('imageInput');
 const exportButton = document.getElementById('exportButton');
 const resetButton = document.getElementById('resetButton');
@@ -130,7 +129,6 @@ function setOverlayActive(id, active) {
   }
 
   updateOverlayControls();
-  updateHint();
   requestRender();
 }
 
@@ -151,13 +149,6 @@ function updateOverlayControls() {
   });
 }
 
-function updateHint() {
-  const activeNames = OVERLAY_DEFS.filter((overlay) => isOverlayActive(overlay.id)).map((overlay) => overlay.label);
-  hintText.textContent = state.image
-    ? (activeNames.length ? `当前启用：${activeNames.join(' + ')}` : '请勾选一个或多个参考线')
-    : '导入一张图片后开始绘制辅助线';
-}
-
 function resetGuides() {
   state.overlays = {
     grid3: true,
@@ -176,7 +167,6 @@ function resetGuides() {
     topPoint: { x: 0.5, y: 0.18 },
   };
   updateOverlayControls();
-  updateHint();
   requestRender();
 }
 
@@ -237,7 +227,6 @@ function clearImage() {
   resetButton.disabled = true;
   clearButton.disabled = true;
   updateViewButtons();
-  updateHint();
   requestRender();
 }
 
@@ -713,7 +702,6 @@ async function loadImage(file) {
   state.view.panX = 0;
   state.view.panY = 0;
   updateOverlayControls();
-  updateHint();
   emptyState.classList.add('is-hidden');
   exportButton.disabled = false;
   resetButton.disabled = false;
@@ -891,6 +879,5 @@ window.addEventListener('beforeunload', () => {
 
 buildOverlayControls();
 resizeCanvas();
-updateHint();
 updateViewButtons();
 requestRender();
