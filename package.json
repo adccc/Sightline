@@ -1,0 +1,9 @@
+{
+  "name": "sightline",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "python3 -m http.server 4173",
+    "start": "python3 -m http.server 4173"
+  }
+}

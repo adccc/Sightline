@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Sightline</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">纯前端绘画辅助工具</p>
+          <h1>Sightline</h1>
+        </div>
+        <div class="actions">
+          <label class="button button-primary" for="imageInput">导入图片</label>
+          <button class="button" id="exportButton" type="button" disabled>导出合成图</button>
+          <button class="button" id="resetButton" type="button" disabled>重置辅助线</button>
+          <button class="button button-ghost" id="clearButton" type="button" disabled>清除图片</button>
+          <input id="imageInput" type="file" accept="image/*" hidden />
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="canvas-panel">
+          <div class="canvas-toolbar">
+            <div class="hint" id="hintText">导入一张图片后开始绘制辅助线</div>
+          </div>
+
+          <div class="stage-wrap" id="stageWrap">
+            <canvas id="stage" aria-label="画布预览"></canvas>
+            <div class="empty-state" id="emptyState">
+              <div class="empty-card">
+                <p class="empty-title">拖入或导入一张照片</p>
+                <p class="empty-copy">支持九宫格、16 宫格、黄金分割线、水平线和 1/2/3 点透视。</p>
+                <label class="button button-primary" for="imageInput">选择图片</label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="side-panel">
+          <section class="panel-card">
+            <h2>参考线类型</h2>
+            <div class="overlay-controls" id="overlayControls"></div>
+            <p class="small-note">可多选叠加。点击色块可在 8 个预设颜色间切换，透视辅助可分别调整各点颜色。</p>
+          </section>
+
+          <section class="panel-card">
+            <h2>参考线样式</h2>
+            <div class="control-stack">
+              <label class="control-row">
+                <span>线宽</span>
+                <input id="guideWidth" type="range" min="0.5" max="8" step="0.5" value="1.8" />
+              </label>
+              <button class="button" id="fitButton" type="button" disabled>重置视图</button>
+            </div>
+          </section>
+
+          <section class="panel-card">
+            <h2>操作说明</h2>
+            <ul>
+              <li>拖动画面上的圆点可调整透视点。</li>
+              <li>参考线支持多选叠加。</li>
+              <li>按住 Command 并滚动滚轮可缩放图片。</li>
+              <li>拖动画布空白处可平移视图。</li>
+              <li>支持拖入文件，关闭页面后不会保留缓存。</li>
+            </ul>
+          </section>
+
+          <section class="panel-card">
+            <h2>导出说明</h2>
+            <p>导出的是当前辅助线叠加后的合成图片，直接用于临摹或分析。</p>
+          </section>
+
+          <section class="panel-card mobile-note">
+            <h2>iPad 适配</h2>
+            <p>按钮和拖拽区域都支持触控操作，适合平板直接打开使用。</p>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <script src="./app.js?v=20260523-2"></script>
+  </body>
+ </html>
