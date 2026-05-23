@@ -17,6 +17,7 @@
           <label class="button button-primary" for="imageInput">导入图片</label>
           <button class="button" id="exportButton" type="button" disabled>导出合成图</button>
           <button class="button" id="resetButton" type="button" disabled>重置辅助线</button>
+          <button class="button" id="fullscreenButton" type="button" disabled>全屏预览</button>
           <button class="button button-ghost" id="clearButton" type="button" disabled>清除图片</button>
           <input id="imageInput" type="file" accept="image/*" hidden />
         </div>
@@ -40,7 +41,7 @@
           <section class="panel-card">
             <h2>参考线类型</h2>
             <div class="overlay-controls" id="overlayControls"></div>
-            <p class="small-note">可多选叠加。点击色块可在 8 个预设颜色间切换，透视辅助可分别调整各点颜色。</p>
+            <p class="small-note">可多选叠加。色块表示各参考线的固定颜色，构图与透视使用不同色系以便区分。</p>
           </section>
 
           <section class="panel-card">
@@ -59,8 +60,9 @@
             <ul>
               <li>拖动画面上的圆点可调整透视点。</li>
               <li>参考线支持多选叠加。</li>
-              <li>按住 Command 并滚动滚轮可缩放图片。</li>
+              <li>按住 Command 并滚动滚轮可缩放图片；触屏设备支持双指捏合缩放。</li>
               <li>拖动画布空白处可平移视图。</li>
+              <li>全屏预览默认按图片 100% 尺寸展示，可继续缩放和平移。</li>
               <li>支持拖入文件，关闭页面后不会保留缓存。</li>
             </ul>
           </section>
@@ -78,6 +80,16 @@
       </main>
     </div>
 
-    <script src="./app.js?v=20260524-1"></script>
+    <div class="fullscreen-overlay is-hidden" id="fullscreenOverlay" aria-hidden="true">
+      <div class="fullscreen-toolbar">
+        <span class="fullscreen-title">全屏预览 · 100%</span>
+        <button class="button" id="fullscreenCloseButton" type="button">退出全屏</button>
+      </div>
+      <div class="fullscreen-stage-wrap" id="fullscreenStageWrap">
+        <canvas id="fullscreenStage" aria-label="全屏画布预览"></canvas>
+      </div>
+    </div>
+
+    <script src="./app.js?v=20260524-2"></script>
   </body>
  </html>

@@ -6,10 +6,21 @@ const exportButton = document.getElementById('exportButton');
 const resetButton = document.getElementById('resetButton');
 const clearButton = document.getElementById('clearButton');
 const fitButton = document.getElementById('fitButton');
+const fullscreenButton = document.getElementById('fullscreenButton');
+const fullscreenOverlay = document.getElementById('fullscreenOverlay');
+const fullscreenStageWrap = document.getElementById('fullscreenStageWrap');
+const fullscreenCanvas = document.getElementById('fullscreenStage');
+const fullscreenCloseButton = document.getElementById('fullscreenCloseButton');
 const guideWidthInput = document.getElementById('guideWidth');
 const overlayControls = document.getElementById('overlayControls');
 
-const PALETTE = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'];
+const COMPOSITION_COLORS = {
+  grid3: '#06b6d4',
+  grid4: '#ec4899',
+  golden: '#facc15',
+};
+
+const PERSPECTIVE_COLORS = ['#ef4444', '#22c55e', '#6366f1'];
 const OVERLAY_DEFS = [
   { id: 'grid3', label: '九宫格', group: 'composition' },
   { id: 'grid4', label: '16宫格', group: 'composition' },
@@ -34,14 +45,6 @@ const state = {
   style: {
     width: 1.8,
   },
-  overlayColors: {
-    grid3: 0,
-    grid4: 5,
-    golden: 2,
-    one: 3,
-    two: 4,
-    three: 6,
-  },
   overlays: {
     grid3: true,
     grid4: false,
@@ -50,11 +53,6 @@ const state = {
     two: false,
     three: false,
   },
-  perspectivePointColors: {
-    one: [3],
-    two: [4, 7],
-    three: [6, 7, 0],
-  },
   perspective: {
     horizonY: 0.5,
     onePoint: { x: 0.5 },
@@ -62,7 +60,48 @@ const state = {
     rightPoint: { x: 0.78 },
     topPoint: { x: 0.5, y: 0.18 },
   },
+  fullscreen: {
+    active: false,
+    view: {
+      zoom: 1,
+      panX: 0,
+      panY: 0,
+    },
+  },
 };
+
+const pointerTracks = new Map();
+const viewportPointerTracks = new WeakMap();
+
+function getViewport(surface) {
+  if (surface === 'fullscreen') {
+    return {
+      surface,
+      canvas: fullscreenCanvas,
+      wrap: fullscreenStageWrap,
+      view: state.fullscreen.view,
+    };
+  }
+  return {
+    surface: 'main',
+    canvas,
+    wrap: stageWrap,
+    view: state.view,
+  };
+}
+
+function getActiveViewport() {
+  return state.fullscreen.active ? getViewport('fullscreen') : getViewport('main');
+}
+
+function getPointerTrack(viewport) {
+  let track = viewportPointerTracks.get(viewport.canvas);
+  if (!track) {
+    track = new Map();
+    viewportPointerTracks.set(viewport.canvas, track);
+  }
+  return track;
+}
 
 let renderQueued = false;
 function clamp(value, min, max) {
@@ -83,33 +122,15 @@ function isOverlayActive(id) {
 }
 
 function getOverlayColor(id) {
-  return PALETTE[state.overlayColors[id] % PALETTE.length];
+  return COMPOSITION_COLORS[id] || PERSPECTIVE_COLORS[0];
 }
 
-function getPerspectiveColors(id, count) {
-  if (state.perspectivePointColors[id]) {
-    return state.perspectivePointColors[id].slice(0, count).map((colorIndex) => PALETTE[colorIndex % PALETTE.length]);
-  }
-  const start = state.overlayColors[id] % PALETTE.length;
-  return Array.from({ length: count }, (_, index) => PALETTE[(start + index) % PALETTE.length]);
+function getPerspectiveColors(_id, count) {
+  return PERSPECTIVE_COLORS.slice(0, count);
 }
 
 function getPerspectivePointCount(id) {
   return { one: 1, two: 2, three: 3 }[id] || 0;
-}
-
-function cycleOverlayColor(id) {
-  state.overlayColors[id] = (state.overlayColors[id] + 1) % PALETTE.length;
-  updateOverlayControls();
-  requestRender();
-}
-
-function cyclePerspectivePointColor(id, index) {
-  const colors = state.perspectivePointColors[id];
-  if (!colors || colors[index] === undefined) return;
-  colors[index] = (colors[index] + 1) % PALETTE.length;
-  updateOverlayControls();
-  requestRender();
 }
 
 function setOverlayActive(id, active) {
@@ -136,16 +157,8 @@ function updateOverlayControls() {
   overlayControls.querySelectorAll('[data-overlay-id]').forEach((row) => {
     const id = row.dataset.overlayId;
     const checkbox = row.querySelector('input[type="checkbox"]');
-    const swatches = row.querySelectorAll('[data-color-index]');
     row.classList.toggle('is-active', isOverlayActive(id));
     if (checkbox) checkbox.checked = isOverlayActive(id);
-    swatches.forEach((swatch) => {
-      const colorIndex = Number.parseInt(swatch.dataset.colorIndex, 10);
-      const colors = getPerspectivePointCount(id)
-        ? getPerspectiveColors(id, getPerspectivePointCount(id))
-        : [getOverlayColor(id)];
-      swatch.style.background = colors[colorIndex] || getOverlayColor(id);
-    });
   });
 }
 
@@ -170,58 +183,144 @@ function resetGuides() {
   requestRender();
 }
 
-function resetView() {
-  state.view.zoom = 1;
-  state.view.panX = 0;
-  state.view.panY = 0;
+function resetView(viewRef = state.view) {
+  viewRef.zoom = 1;
+  viewRef.panX = 0;
+  viewRef.panY = 0;
   updateViewButtons();
   requestRender();
+}
+
+function getZoomForActualSize(containerW, containerH, imageW, imageH) {
+  const base = fitContain(containerW, containerH, imageW, imageH);
+  if (!base.w) return 1;
+  return imageW / base.w;
+}
+
+function setViewToActualSize(viewRef, containerW, containerH, imageW, imageH) {
+  viewRef.zoom = getZoomForActualSize(containerW, containerH, imageW, imageH);
+  viewRef.panX = 0;
+  viewRef.panY = 0;
 }
 
 function updateViewButtons() {
   fitButton.disabled = !state.image || (state.view.zoom === 1 && state.view.panX === 0 && state.view.panY === 0);
+  fullscreenButton.disabled = !state.image;
 }
 
-function zoomAt(clientX, clientY, deltaY) {
+function setZoomAt(viewport, clientX, clientY, nextZoom) {
   if (!state.image) return;
 
-  const box = canvas.getBoundingClientRect();
-  const before = screenToImage(clientX, clientY);
-  const factor = Math.exp(-deltaY * 0.0012);
-  const nextZoom = clamp(state.view.zoom * factor, 0.2, 8);
+  const { canvas: targetCanvas, view } = viewport;
+  const box = targetCanvas.getBoundingClientRect();
+  const before = screenToImage(clientX, clientY, viewport);
+  const clampedZoom = clamp(nextZoom, 0.2, 8);
   const base = fitContain(box.width, box.height, state.image.naturalWidth, state.image.naturalHeight);
-  const nextW = base.w * nextZoom;
-  const nextH = base.h * nextZoom;
+  const nextW = base.w * clampedZoom;
+  const nextH = base.h * clampedZoom;
   const localX = clientX - box.left;
   const localY = clientY - box.top;
 
-  state.view.zoom = nextZoom;
-  state.view.panX = localX - box.width / 2 - (before.x - 0.5) * nextW;
-  state.view.panY = localY - box.height / 2 - (before.y - 0.5) * nextH;
+  view.zoom = clampedZoom;
+  view.panX = localX - box.width / 2 - (before.x - 0.5) * nextW;
+  view.panY = localY - box.height / 2 - (before.y - 0.5) * nextH;
   updateViewButtons();
   requestRender();
 }
 
-function startPanDrag(pointerEvent) {
+function zoomAt(clientX, clientY, deltaY, viewport = getActiveViewport()) {
+  if (!state.image) return;
+  const factor = Math.exp(-deltaY * 0.0012);
+  setZoomAt(viewport, clientX, clientY, viewport.view.zoom * factor);
+}
+
+function startPanDrag(pointerEvent, viewport = getActiveViewport()) {
   state.drag = {
     target: { id: 'pan' },
     pointerId: pointerEvent.pointerId,
     startX: pointerEvent.clientX,
     startY: pointerEvent.clientY,
-    base: { ...state.view },
+    base: { ...viewport.view },
+    viewport,
   };
-  canvas.classList.add('is-panning');
-  canvas.setPointerCapture(pointerEvent.pointerId);
+  viewport.canvas.classList.add('is-panning');
+  viewport.canvas.setPointerCapture(pointerEvent.pointerId);
+}
+
+function clearPinch(viewport) {
+  pointerTracks.delete(viewport.canvas);
+}
+
+function getPinchMetrics(track) {
+  const points = [...track.values()];
+  if (points.length < 2) return null;
+  const [first, second] = points;
+  return {
+    distance: Math.hypot(second.x - first.x, second.y - first.y),
+    centerX: (first.x + second.x) / 2,
+    centerY: (first.y + second.y) / 2,
+  };
+}
+
+function startPinchIfNeeded(viewport) {
+  const track = getPointerTrack(viewport);
+  if (track.size !== 2) return;
+
+  const metrics = getPinchMetrics(track);
+  if (!metrics || metrics.distance < 8) return;
+
+  if (state.drag?.viewport?.canvas === viewport.canvas) {
+    endDrag({ pointerId: state.drag.pointerId }, viewport);
+  }
+
+  pointerTracks.set(viewport.canvas, {
+    startDistance: metrics.distance,
+    startZoom: viewport.view.zoom,
+    startPanX: viewport.view.panX,
+    startPanY: viewport.view.panY,
+    anchor: screenToImage(metrics.centerX, metrics.centerY, viewport),
+    centerX: metrics.centerX,
+    centerY: metrics.centerY,
+  });
+}
+
+function updatePinch(viewport) {
+  const track = getPointerTrack(viewport);
+  const pinch = pointerTracks.get(viewport.canvas);
+  if (!pinch || track.size !== 2) return;
+
+  const metrics = getPinchMetrics(track);
+  if (!metrics || !metrics.distance) return;
+
+  const ratio = metrics.distance / pinch.startDistance;
+  const nextZoom = clamp(pinch.startZoom * ratio, 0.2, 8);
+  const box = viewport.canvas.getBoundingClientRect();
+  const base = fitContain(box.width, box.height, state.image.naturalWidth, state.image.naturalHeight);
+  const nextW = base.w * nextZoom;
+  const nextH = base.h * nextZoom;
+  const localX = metrics.centerX - box.left;
+  const localY = metrics.centerY - box.top;
+
+  viewport.view.zoom = nextZoom;
+  viewport.view.panX = localX - box.width / 2 - (pinch.anchor.x - 0.5) * nextW;
+  viewport.view.panY = localY - box.height / 2 - (pinch.anchor.y - 0.5) * nextH;
+  updateViewButtons();
+  requestRender();
 }
 
 function clearImage() {
   if (state.imageUrl) {
     URL.revokeObjectURL(state.imageUrl);
   }
+  closeFullscreen();
   state.image = null;
   state.imageUrl = '';
   state.fileName = 'image';
   state.drag = null;
+  clearPinch(getViewport('main'));
+  clearPinch(getViewport('fullscreen'));
+  getPointerTrack(getViewport('main')).clear();
+  getPointerTrack(getViewport('fullscreen')).clear();
   emptyState.classList.remove('is-hidden');
   exportButton.disabled = true;
   resetButton.disabled = true;
@@ -246,44 +345,51 @@ function fitContain(containerW, containerH, imageW, imageH) {
   };
 }
 
-function getImageRect(containerW, containerH, imageW, imageH) {
+function getImageRect(containerW, containerH, imageW, imageH, viewRef = state.view) {
   const base = fitContain(containerW, containerH, imageW, imageH);
-  const w = base.w * state.view.zoom;
-  const h = base.h * state.view.zoom;
+  const w = base.w * viewRef.zoom;
+  const h = base.h * viewRef.zoom;
   return {
-    x: containerW / 2 + state.view.panX - w / 2,
-    y: containerH / 2 + state.view.panY - h / 2,
+    x: containerW / 2 + viewRef.panX - w / 2,
+    y: containerH / 2 + viewRef.panY - h / 2,
     w,
     h,
   };
 }
 
-function resizeCanvas() {
-  const rect = stageWrap.getBoundingClientRect();
+function resizeTargetCanvas(targetCanvas, wrap) {
+  const rect = wrap.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(1, Math.round(rect.width * dpr));
   const height = Math.max(1, Math.round(rect.height * dpr));
 
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
+  if (targetCanvas.width !== width || targetCanvas.height !== height) {
+    targetCanvas.width = width;
+    targetCanvas.height = height;
   }
 
-  canvas.style.width = `${rect.width}px`;
-  canvas.style.height = `${rect.height}px`;
+  targetCanvas.style.width = `${rect.width}px`;
+  targetCanvas.style.height = `${rect.height}px`;
+}
+
+function resizeCanvas() {
+  resizeTargetCanvas(canvas, stageWrap);
+  if (state.fullscreen.active) {
+    resizeTargetCanvas(fullscreenCanvas, fullscreenStageWrap);
+  }
   requestRender();
 }
 
-function getStageMetrics() {
-  const box = canvas.getBoundingClientRect();
+function getStageMetrics(viewport = getActiveViewport()) {
+  const box = viewport.canvas.getBoundingClientRect();
   const imageRect = state.image
-    ? getImageRect(box.width, box.height, state.image.naturalWidth, state.image.naturalHeight)
+    ? getImageRect(box.width, box.height, state.image.naturalWidth, state.image.naturalHeight, viewport.view)
     : { x: 0, y: 0, w: box.width, h: box.height };
-  return { box, imageRect };
+  return { box, imageRect, viewport };
 }
 
-function screenToImage(clientX, clientY) {
-  const { box, imageRect } = getStageMetrics();
+function screenToImage(clientX, clientY, viewport = getActiveViewport()) {
+  const { box, imageRect } = getStageMetrics(viewport);
   const x = clientX - box.left - imageRect.x;
   const y = clientY - box.top - imageRect.y;
   return {
@@ -433,15 +539,11 @@ function drawOverlay(ctx, rect, box) {
       const [leftColor, rightColor] = getPerspectiveColors('two', 2);
       const left = imageToScreen({ x: state.perspective.leftPoint.x, y: state.perspective.horizonY }, rect);
       const right = imageToScreen({ x: state.perspective.rightPoint.x, y: state.perspective.horizonY }, rect);
-      samples.forEach((sample, index) => {
+      samples.forEach((sample) => {
         const target = rect.x + rect.w * sample.x;
         const targetY = rect.y + rect.h * sample.y;
-        if (index <= 3) {
-          drawLine(ctx, left.x, left.y, target, targetY, leftColor, width, 0.82);
-        }
-        if (index >= 4 || index === 0 || index === 2) {
-          drawLine(ctx, right.x, right.y, target, targetY, rightColor, width, 0.82);
-        }
+        drawLine(ctx, left.x, left.y, target, targetY, leftColor, width, 0.82);
+        drawLine(ctx, right.x, right.y, target, targetY, rightColor, width, 0.82);
       });
       drawCircle(ctx, left.x, left.y, pointRadius, 'rgba(255,255,255,0.96)', leftColor);
       drawCircle(ctx, right.x, right.y, pointRadius, 'rgba(255,255,255,0.96)', rightColor);
@@ -455,18 +557,12 @@ function drawOverlay(ctx, rect, box) {
       const left = imageToScreen({ x: state.perspective.leftPoint.x, y: state.perspective.horizonY }, rect);
       const right = imageToScreen({ x: state.perspective.rightPoint.x, y: state.perspective.horizonY }, rect);
       const top = imageToScreen(state.perspective.topPoint, rect);
-      samples.forEach((sample, index) => {
+      samples.forEach((sample) => {
         const target = rect.x + rect.w * sample.x;
         const targetY = rect.y + rect.h * sample.y;
-        if (index <= 3) {
-          drawLine(ctx, left.x, left.y, target, targetY, leftColor, width, 0.8);
-        }
-        if (index >= 4 || index === 0 || index === 2) {
-          drawLine(ctx, right.x, right.y, target, targetY, rightColor, width, 0.8);
-        }
-        if (index === 1 || index === 3 || index === 4 || index === 5) {
-          drawLine(ctx, top.x, top.y, target, targetY, topColor, width, 0.8);
-        }
+        drawLine(ctx, left.x, left.y, target, targetY, leftColor, width, 0.8);
+        drawLine(ctx, right.x, right.y, target, targetY, rightColor, width, 0.8);
+        drawLine(ctx, top.x, top.y, target, targetY, topColor, width, 0.8);
       });
       drawCircle(ctx, left.x, left.y, pointRadius, 'rgba(255,255,255,0.96)', leftColor);
       drawCircle(ctx, right.x, right.y, pointRadius, 'rgba(255,255,255,0.96)', rightColor);
@@ -486,18 +582,18 @@ function drawOverlay(ctx, rect, box) {
   }
 }
 
-function render() {
-  const ctx = canvas.getContext('2d');
+function renderViewport(targetCanvas, viewport) {
+  const ctx = targetCanvas.getContext('2d');
   if (!ctx) return;
 
   const dpr = window.devicePixelRatio || 1;
-  const { box, imageRect } = getStageMetrics();
+  const { box, imageRect } = getStageMetrics(viewport);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, box.width, box.height);
 
   if (!state.image) {
     ctx.save();
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.08)';
+    ctx.fillStyle = viewport.surface === 'fullscreen' ? 'rgba(255, 255, 255, 0.04)' : 'rgba(15, 23, 42, 0.08)';
     ctx.fillRect(0, 0, box.width, box.height);
     ctx.restore();
     return;
@@ -519,10 +615,18 @@ function render() {
   ctx.restore();
 }
 
-function getPointerTarget(clientX, clientY) {
-  const { imageRect } = getStageMetrics();
-  const x = clientX - canvas.getBoundingClientRect().left;
-  const y = clientY - canvas.getBoundingClientRect().top;
+function render() {
+  renderViewport(canvas, getViewport('main'));
+  if (state.fullscreen.active) {
+    renderViewport(fullscreenCanvas, getViewport('fullscreen'));
+  }
+}
+
+function getPointerTarget(clientX, clientY, viewport = getActiveViewport()) {
+  const { imageRect } = getStageMetrics(viewport);
+  const box = viewport.canvas.getBoundingClientRect();
+  const x = clientX - box.left;
+  const y = clientY - box.top;
   const radius = 14;
   const horizonY = imageRect.y + imageRect.h * state.perspective.horizonY;
   const perspectiveMode = state.perspectiveMode;
@@ -562,9 +666,9 @@ function getPointerTarget(clientX, clientY) {
   return hit;
 }
 
-function setPointerDragging(target, pointerEvent) {
-  const rect = getStageMetrics().imageRect;
-  const position = screenToImage(pointerEvent.clientX, pointerEvent.clientY);
+function setPointerDragging(target, pointerEvent, viewport = getActiveViewport()) {
+  const rect = getStageMetrics(viewport).imageRect;
+  const position = screenToImage(pointerEvent.clientX, pointerEvent.clientY, viewport);
   state.drag = {
     target,
     pointerId: pointerEvent.pointerId,
@@ -572,18 +676,20 @@ function setPointerDragging(target, pointerEvent) {
     startY: position.y,
     base: JSON.parse(JSON.stringify(state.perspective)),
     rect,
+    viewport,
   };
-  canvas.setPointerCapture(pointerEvent.pointerId);
+  viewport.canvas.setPointerCapture(pointerEvent.pointerId);
 }
 
 function updateDrag(pointerEvent) {
   if (!state.drag || state.drag.pointerId !== pointerEvent.pointerId) return;
-  const position = screenToImage(pointerEvent.clientX, pointerEvent.clientY);
+  const viewport = state.drag.viewport || getViewport('main');
+  const position = screenToImage(pointerEvent.clientX, pointerEvent.clientY, viewport);
   const base = state.drag.base;
 
   if (state.drag.target.id === 'pan') {
-    state.view.panX = base.panX + (pointerEvent.clientX - state.drag.startX);
-    state.view.panY = base.panY + (pointerEvent.clientY - state.drag.startY);
+    viewport.view.panX = base.panX + (pointerEvent.clientX - state.drag.startX);
+    viewport.view.panY = base.panY + (pointerEvent.clientY - state.drag.startY);
     updateViewButtons();
     requestRender();
     return;
@@ -629,15 +735,50 @@ function updateDrag(pointerEvent) {
   requestRender();
 }
 
-function endDrag(pointerEvent) {
+function endDrag(pointerEvent, viewport = state.drag?.viewport || getActiveViewport()) {
   if (!state.drag || state.drag.pointerId !== pointerEvent.pointerId) return;
   state.drag = null;
-  canvas.classList.remove('is-panning');
+  viewport.canvas.classList.remove('is-panning');
   try {
-    canvas.releasePointerCapture(pointerEvent.pointerId);
+    viewport.canvas.releasePointerCapture(pointerEvent.pointerId);
   } catch {
     // Ignore release errors.
   }
+}
+
+function openFullscreen() {
+  if (!state.image || state.fullscreen.active) return;
+
+  state.fullscreen.active = true;
+  fullscreenOverlay.classList.remove('is-hidden');
+  fullscreenOverlay.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('is-fullscreen-open');
+  resizeTargetCanvas(fullscreenCanvas, fullscreenStageWrap);
+
+  const box = fullscreenCanvas.getBoundingClientRect();
+  setViewToActualSize(
+    state.fullscreen.view,
+    box.width,
+    box.height,
+    state.image.naturalWidth,
+    state.image.naturalHeight,
+  );
+
+  requestRender();
+}
+
+function closeFullscreen() {
+  if (!state.fullscreen.active) return;
+
+  state.fullscreen.active = false;
+  state.drag = null;
+  clearPinch(getViewport('fullscreen'));
+  getPointerTrack(getViewport('fullscreen')).clear();
+  fullscreenOverlay.classList.add('is-hidden');
+  fullscreenOverlay.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('is-fullscreen-open');
+  fullscreenCanvas.classList.remove('is-panning');
+  requestRender();
 }
 
 async function exportComposite() {
@@ -750,29 +891,21 @@ function buildOverlayControls() {
       const pointCount = getPerspectivePointCount(overlay.id);
       if (pointCount) {
         getPerspectiveColors(overlay.id, pointCount).forEach((color, index) => {
-          const swatch = document.createElement('button');
-          swatch.type = 'button';
-          swatch.className = 'swatch swatch-point';
-          swatch.title = `切换 V${index + 1} 颜色`;
-          swatch.dataset.colorIndex = String(index);
+          const swatch = document.createElement('span');
+          swatch.className = 'swatch swatch-point swatch-sample';
           swatch.style.background = color;
-          swatch.setAttribute('aria-label', `切换 ${overlay.label} V${index + 1} 颜色`);
+          swatch.setAttribute('aria-hidden', 'true');
 
           const label = document.createElement('span');
           label.textContent = `V${index + 1}`;
           swatch.appendChild(label);
-
-          swatch.addEventListener('click', () => cyclePerspectivePointColor(overlay.id, index));
           colorControls.appendChild(swatch);
         });
       } else {
-        const swatch = document.createElement('button');
-        swatch.type = 'button';
-        swatch.className = 'swatch';
-        swatch.title = '切换颜色';
-        swatch.dataset.colorIndex = '0';
+        const swatch = document.createElement('span');
+        swatch.className = 'swatch swatch-sample';
         swatch.style.background = getOverlayColor(overlay.id);
-        swatch.addEventListener('click', () => cycleOverlayColor(overlay.id));
+        swatch.setAttribute('aria-hidden', 'true');
         colorControls.appendChild(swatch);
       }
 
@@ -787,29 +920,81 @@ function buildOverlayControls() {
   updateOverlayControls();
 }
 
-canvas.addEventListener('pointerdown', (event) => {
-  if (!state.image) return;
-  if (state.spacePressed) {
-    startPanDrag(event);
-    return;
-  }
-  const target = getPointerTarget(event.clientX, event.clientY);
-  if (target) {
-    setPointerDragging(target, event);
-    return;
-  }
-  startPanDrag(event);
-});
+function bindStageEvents(targetCanvas, viewportFactory) {
+  targetCanvas.addEventListener('pointerdown', (event) => {
+    if (!state.image) return;
 
-canvas.addEventListener('pointermove', (event) => {
-  if (!state.drag) return;
-  updateDrag(event);
-});
+    const viewport = viewportFactory();
+    const track = getPointerTrack(viewport);
+    track.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
-canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointercancel', endDrag);
+    if (track.size >= 2) {
+      startPinchIfNeeded(viewport);
+      return;
+    }
+
+    if (state.spacePressed) {
+      startPanDrag(event, viewport);
+      return;
+    }
+
+    const target = getPointerTarget(event.clientX, event.clientY, viewport);
+    if (target) {
+      setPointerDragging(target, event, viewport);
+      return;
+    }
+    startPanDrag(event, viewport);
+  });
+
+  targetCanvas.addEventListener('pointermove', (event) => {
+    const viewport = viewportFactory();
+    const track = getPointerTrack(viewport);
+    if (track.has(event.pointerId)) {
+      track.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+
+    if (track.size >= 2 && pointerTracks.has(viewport.canvas)) {
+      updatePinch(viewport);
+      return;
+    }
+
+    if (!state.drag) return;
+    updateDrag(event);
+  });
+
+  const handlePointerEnd = (event) => {
+    const viewport = viewportFactory();
+    const track = getPointerTrack(viewport);
+    track.delete(event.pointerId);
+
+    if (track.size < 2) {
+      clearPinch(viewport);
+    } else if (track.size === 2) {
+      startPinchIfNeeded(viewport);
+    }
+
+    endDrag(event, viewport);
+  };
+
+  targetCanvas.addEventListener('pointerup', handlePointerEnd);
+  targetCanvas.addEventListener('pointercancel', handlePointerEnd);
+
+  targetCanvas.addEventListener('wheel', (event) => {
+    if (!(event.metaKey || event.ctrlKey)) return;
+    event.preventDefault();
+    zoomAt(event.clientX, event.clientY, event.deltaY, viewportFactory());
+  }, { passive: false });
+}
+
+bindStageEvents(canvas, () => getViewport('main'));
+bindStageEvents(fullscreenCanvas, () => getViewport('fullscreen'));
 
 window.addEventListener('keydown', (event) => {
+  if (event.code === 'Escape' && state.fullscreen.active) {
+    event.preventDefault();
+    closeFullscreen();
+    return;
+  }
   if (event.code !== 'Space') return;
   const target = event.target;
   const tagName = target && target.tagName ? target.tagName.toLowerCase() : '';
@@ -842,7 +1027,9 @@ imageInput.addEventListener('change', async (event) => {
 exportButton.addEventListener('click', exportComposite);
 resetButton.addEventListener('click', resetGuides);
 clearButton.addEventListener('click', clearImage);
-fitButton.addEventListener('click', resetView);
+fitButton.addEventListener('click', () => resetView());
+fullscreenButton.addEventListener('click', openFullscreen);
+fullscreenCloseButton.addEventListener('click', closeFullscreen);
 
 guideWidthInput.addEventListener('input', () => {
   state.style.width = Number.parseFloat(guideWidthInput.value);
@@ -865,11 +1052,6 @@ stageWrap.addEventListener('drop', async (event) => {
 });
 
 window.addEventListener('resize', resizeCanvas);
-canvas.addEventListener('wheel', (event) => {
-  if (!(event.metaKey || event.ctrlKey)) return;
-  event.preventDefault();
-  zoomAt(event.clientX, event.clientY, event.deltaY);
-}, { passive: false });
 
 window.addEventListener('beforeunload', () => {
   if (state.imageUrl) {
