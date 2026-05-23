@@ -20,3 +20,8 @@
 ## 使用
 
 直接打开 `index.html`，或者放到任意静态托管环境中部署。
+
+## Cloudflare Pages
+
+- Build command: `npm run build`
+- Output directory: `dist`
