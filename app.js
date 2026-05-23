@@ -13,6 +13,14 @@ const fullscreenCanvas = document.getElementById('fullscreenStage');
 const fullscreenCloseButton = document.getElementById('fullscreenCloseButton');
 const guideWidthInput = document.getElementById('guideWidth');
 const overlayControls = document.getElementById('overlayControls');
+const cropRatioSelect = document.getElementById('cropRatioSelect');
+const startCropButton = document.getElementById('startCropButton');
+const cropActions = document.getElementById('cropActions');
+const applyCropButton = document.getElementById('applyCropButton');
+const cancelCropButton = document.getElementById('cancelCropButton');
+const rotateButton = document.getElementById('rotateButton');
+const flipHButton = document.getElementById('flipHButton');
+const flipVButton = document.getElementById('flipVButton');
 
 const COMPOSITION_COLORS = {
   grid3: '#06b6d4',
@@ -67,6 +75,11 @@ const state = {
       panX: 0,
       panY: 0,
     },
+  },
+  crop: {
+    active: false,
+    ratio: null,
+    rect: { x: 0.1, y: 0.1, w: 0.8, h: 0.8 },
   },
 };
 
@@ -206,6 +219,395 @@ function setViewToActualSize(viewRef, containerW, containerH, imageW, imageH) {
 function updateViewButtons() {
   fitButton.disabled = !state.image || (state.view.zoom === 1 && state.view.panX === 0 && state.view.panY === 0);
   fullscreenButton.disabled = !state.image;
+  updateImageEditButtons();
+}
+
+function updateImageEditButtons() {
+  const hasImage = Boolean(state.image);
+  const cropping = state.crop.active;
+  cropRatioSelect.disabled = !hasImage || cropping;
+  startCropButton.disabled = !hasImage || cropping;
+  rotateButton.disabled = !hasImage || cropping;
+  flipHButton.disabled = !hasImage || cropping;
+  flipVButton.disabled = !hasImage || cropping;
+  cropActions.classList.toggle('is-hidden', !cropping);
+  canvas.classList.toggle('is-cropping', cropping);
+  fullscreenCanvas.classList.toggle('is-cropping', cropping);
+}
+
+function getSelectedCropRatio() {
+  const value = cropRatioSelect.value;
+  if (value === 'free') return null;
+  const ratio = Number.parseFloat(value);
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : null;
+}
+
+function getMaxNormalizedCropRect(ratio, imgW, imgH) {
+  if (!imgW || !imgH) {
+    return { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
+  }
+
+  if (!ratio) {
+    const w = 0.8;
+    const h = 0.8;
+    return { x: (1 - w) / 2, y: (1 - h) / 2, w, h };
+  }
+
+  let cropW = imgW;
+  let cropH = cropW / ratio;
+  if (cropH > imgH) {
+    cropH = imgH;
+    cropW = cropH * ratio;
+  }
+
+  return {
+    x: (imgW - cropW) / 2 / imgW,
+    y: (imgH - cropH) / 2 / imgH,
+    w: cropW / imgW,
+    h: cropH / imgH,
+  };
+}
+
+function clampCropRect(rect, ratio) {
+  const minSize = 0.05;
+  let { x, y, w, h } = rect;
+
+  if (ratio) {
+    if (w / h > ratio) {
+      w = h * ratio;
+    } else {
+      h = w / ratio;
+    }
+  }
+
+  w = clamp(w, minSize, 1);
+  h = clamp(h, minSize, 1);
+
+  if (ratio) {
+    if (w / h > ratio) h = w / ratio;
+    else w = h * ratio;
+    w = clamp(w, minSize, 1);
+    h = clamp(h, minSize, 1);
+  }
+
+  x = clamp(x, 0, 1 - w);
+  y = clamp(y, 0, 1 - h);
+  return { x, y, w, h };
+}
+
+function getCropScreenRect(imageRect) {
+  const { x, y, w, h } = state.crop.rect;
+  return {
+    x: imageRect.x + x * imageRect.w,
+    y: imageRect.y + y * imageRect.h,
+    w: w * imageRect.w,
+    h: h * imageRect.h,
+  };
+}
+
+function captureViewState() {
+  const capture = (viewport) => {
+    const { imageRect } = getStageMetrics(viewport);
+    return {
+      panX: viewport.view.panX,
+      panY: viewport.view.panY,
+      pixelScale: imageRect.w / state.image.naturalWidth,
+    };
+  };
+
+  return {
+    main: capture(getViewport('main')),
+    fullscreen: capture(getViewport('fullscreen')),
+  };
+}
+
+function restoreViewState(savedViews) {
+  const restore = (viewport, saved) => {
+    if (!state.image || !saved) return;
+
+    const { box } = getStageMetrics(viewport);
+    const base = fitContain(box.width, box.height, state.image.naturalWidth, state.image.naturalHeight);
+    const nextZoom = clamp((saved.pixelScale * state.image.naturalWidth) / base.w, 0.2, 8);
+
+    viewport.view.zoom = nextZoom;
+    viewport.view.panX = saved.panX;
+    viewport.view.panY = saved.panY;
+  };
+
+  restore(getViewport('main'), savedViews.main);
+  restore(getViewport('fullscreen'), savedViews.fullscreen);
+}
+
+async function replaceImageFromCanvas(sourceCanvas, { preserveView = false } = {}) {
+  const savedViews = preserveView ? captureViewState() : null;
+
+  const blob = await new Promise((resolve) => sourceCanvas.toBlob(resolve, 'image/png'));
+  if (!blob) throw new Error('Canvas export failed');
+
+  const url = URL.createObjectURL(blob);
+  const image = new Image();
+  image.decoding = 'async';
+  image.src = url;
+
+  await new Promise((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error('Image load failed'));
+  });
+
+  if (state.imageUrl) {
+    URL.revokeObjectURL(state.imageUrl);
+  }
+
+  state.image = image;
+  state.imageUrl = url;
+
+  if (preserveView && savedViews) {
+    restoreViewState(savedViews);
+    updateViewButtons();
+  } else {
+    resetView();
+    resetView(state.fullscreen.view);
+  }
+
+  updateImageEditButtons();
+  requestRender();
+}
+
+async function rotateImage90() {
+  if (!state.image || state.crop.active) return;
+
+  const source = state.image;
+  const output = document.createElement('canvas');
+  output.width = source.naturalHeight;
+  output.height = source.naturalWidth;
+  const ctx = output.getContext('2d');
+  if (!ctx) return;
+
+  ctx.translate(output.width / 2, output.height / 2);
+  ctx.rotate(Math.PI / 2);
+  ctx.drawImage(source, -source.naturalWidth / 2, -source.naturalHeight / 2);
+  await replaceImageFromCanvas(output, { preserveView: true });
+}
+
+async function flipImageHorizontal() {
+  if (!state.image || state.crop.active) return;
+
+  const source = state.image;
+  const output = document.createElement('canvas');
+  output.width = source.naturalWidth;
+  output.height = source.naturalHeight;
+  const ctx = output.getContext('2d');
+  if (!ctx) return;
+
+  ctx.translate(output.width / 2, output.height / 2);
+  ctx.scale(-1, 1);
+  ctx.drawImage(source, -source.naturalWidth / 2, -source.naturalHeight / 2);
+  await replaceImageFromCanvas(output, { preserveView: true });
+}
+
+async function flipImageVertical() {
+  if (!state.image || state.crop.active) return;
+
+  const source = state.image;
+  const output = document.createElement('canvas');
+  output.width = source.naturalWidth;
+  output.height = source.naturalHeight;
+  const ctx = output.getContext('2d');
+  if (!ctx) return;
+
+  ctx.translate(output.width / 2, output.height / 2);
+  ctx.scale(1, -1);
+  ctx.drawImage(source, -source.naturalWidth / 2, -source.naturalHeight / 2);
+  await replaceImageFromCanvas(output, { preserveView: true });
+}
+
+function enterCropMode() {
+  if (!state.image) return;
+
+  state.crop.ratio = getSelectedCropRatio();
+  state.crop.rect = getMaxNormalizedCropRect(
+    state.crop.ratio,
+    state.image.naturalWidth,
+    state.image.naturalHeight,
+  );
+  state.crop.active = true;
+  state.drag = null;
+  updateImageEditButtons();
+  requestRender();
+}
+
+function cancelCropMode() {
+  state.crop.active = false;
+  state.drag = null;
+  updateImageEditButtons();
+  requestRender();
+}
+
+async function applyCrop() {
+  if (!state.image || !state.crop.active) return;
+
+  const source = state.image;
+  const rect = clampCropRect(state.crop.rect, state.crop.ratio);
+  const sx = Math.round(rect.x * source.naturalWidth);
+  const sy = Math.round(rect.y * source.naturalHeight);
+  const sw = Math.max(1, Math.round(rect.w * source.naturalWidth));
+  const sh = Math.max(1, Math.round(rect.h * source.naturalHeight));
+
+  const output = document.createElement('canvas');
+  output.width = sw;
+  output.height = sh;
+  const ctx = output.getContext('2d');
+  if (!ctx) return;
+
+  ctx.drawImage(source, sx, sy, sw, sh, 0, 0, sw, sh);
+  state.crop.active = false;
+  state.drag = null;
+  await replaceImageFromCanvas(output);
+}
+
+function drawCropOverlay(ctx, imageRect, box) {
+  if (!state.crop.active) return;
+
+  const cropRect = getCropScreenRect(imageRect);
+  const boxWidth = box.width;
+  const boxHeight = box.height;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.58)';
+  ctx.beginPath();
+  ctx.rect(0, 0, boxWidth, boxHeight);
+  ctx.rect(cropRect.x, cropRect.y, cropRect.w, cropRect.h);
+  ctx.fill('evenodd');
+
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([7, 5]);
+  ctx.strokeRect(cropRect.x + 0.5, cropRect.y + 0.5, cropRect.w - 1, cropRect.h - 1);
+  ctx.setLineDash([]);
+
+  const handleSize = 8;
+  [
+    [cropRect.x, cropRect.y],
+    [cropRect.x + cropRect.w, cropRect.y],
+    [cropRect.x, cropRect.y + cropRect.h],
+    [cropRect.x + cropRect.w, cropRect.y + cropRect.h],
+  ].forEach(([x, y]) => {
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = 'rgba(37, 99, 235, 0.95)';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(x - handleSize / 2, y - handleSize / 2, handleSize, handleSize);
+    ctx.strokeRect(x - handleSize / 2 + 0.5, y - handleSize / 2 + 0.5, handleSize - 1, handleSize - 1);
+  });
+
+  ctx.restore();
+}
+
+function getCropPointerTarget(clientX, clientY, viewport) {
+  if (!state.crop.active) return null;
+
+  const { imageRect } = getStageMetrics(viewport);
+  const box = viewport.canvas.getBoundingClientRect();
+  const x = clientX - box.left;
+  const y = clientY - box.top;
+  const cropRect = getCropScreenRect(imageRect);
+  const handleRadius = 14;
+
+  const handles = [
+    { id: 'crop-nw', x: cropRect.x, y: cropRect.y },
+    { id: 'crop-ne', x: cropRect.x + cropRect.w, y: cropRect.y },
+    { id: 'crop-sw', x: cropRect.x, y: cropRect.y + cropRect.h },
+    { id: 'crop-se', x: cropRect.x + cropRect.w, y: cropRect.y + cropRect.h },
+  ];
+
+  for (const handle of handles) {
+    if (Math.hypot(x - handle.x, y - handle.y) <= handleRadius) {
+      return { id: handle.id, type: 'crop-handle' };
+    }
+  }
+
+  if (x >= cropRect.x && x <= cropRect.x + cropRect.w && y >= cropRect.y && y <= cropRect.y + cropRect.h) {
+    return { id: 'crop-move', type: 'crop-move' };
+  }
+
+  return null;
+}
+
+function setCropDragging(target, pointerEvent, viewport) {
+  state.drag = {
+    target,
+    pointerId: pointerEvent.pointerId,
+    startX: pointerEvent.clientX,
+    startY: pointerEvent.clientY,
+    base: { ...state.crop.rect },
+    imageRect: getStageMetrics(viewport).imageRect,
+    viewport,
+  };
+  viewport.canvas.setPointerCapture(pointerEvent.pointerId);
+}
+
+function resizeCropFromHandle(position, baseRect, handleId, ratio) {
+  let x1 = baseRect.x;
+  let y1 = baseRect.y;
+  let x2 = baseRect.x + baseRect.w;
+  let y2 = baseRect.y + baseRect.h;
+  const px = clamp(position.x, 0, 1);
+  const py = clamp(position.y, 0, 1);
+
+  if (handleId === 'crop-se') {
+    x2 = px;
+    y2 = py;
+  } else if (handleId === 'crop-sw') {
+    x1 = px;
+    y2 = py;
+  } else if (handleId === 'crop-ne') {
+    x2 = px;
+    y1 = py;
+  } else if (handleId === 'crop-nw') {
+    x1 = px;
+    y1 = py;
+  }
+
+  let w = x2 - x1;
+  let h = y2 - y1;
+
+  if (w < 0) {
+    const nextX1 = x2;
+    x2 = x1;
+    x1 = nextX1;
+    w = x2 - x1;
+  }
+  if (h < 0) {
+    const nextY1 = y2;
+    y2 = y1;
+    y1 = nextY1;
+    h = y2 - y1;
+  }
+
+  if (ratio) {
+    if (w / h > ratio) w = h * ratio;
+    else h = w / ratio;
+
+    if (handleId === 'crop-se') {
+      x2 = x1 + w;
+      y2 = y1 + h;
+    } else if (handleId === 'crop-sw') {
+      x1 = x2 - w;
+      y2 = y1 + h;
+    } else if (handleId === 'crop-ne') {
+      x2 = x1 + w;
+      y1 = y2 - h;
+    } else if (handleId === 'crop-nw') {
+      x1 = x2 - w;
+      y1 = y2 - h;
+    }
+  }
+
+  return clampCropRect({
+    x: x1,
+    y: y1,
+    w: x2 - x1,
+    h: y2 - y1,
+  }, ratio);
 }
 
 function setZoomAt(viewport, clientX, clientY, nextZoom) {
@@ -317,6 +719,8 @@ function clearImage() {
   state.imageUrl = '';
   state.fileName = 'image';
   state.drag = null;
+  state.crop.active = false;
+  state.crop.ratio = null;
   clearPinch(getViewport('main'));
   clearPinch(getViewport('fullscreen'));
   getPointerTrack(getViewport('main')).clear();
@@ -326,6 +730,7 @@ function clearImage() {
   resetButton.disabled = true;
   clearButton.disabled = true;
   updateViewButtons();
+  updateImageEditButtons();
   requestRender();
 }
 
@@ -607,6 +1012,7 @@ function renderViewport(targetCanvas, viewport) {
   ctx.restore();
 
   drawOverlay(ctx, imageRect, box);
+  drawCropOverlay(ctx, imageRect, box);
 
   ctx.save();
   ctx.strokeStyle = 'rgba(255,255,255,0.5)';
@@ -686,6 +1092,26 @@ function updateDrag(pointerEvent) {
   const viewport = state.drag.viewport || getViewport('main');
   const position = screenToImage(pointerEvent.clientX, pointerEvent.clientY, viewport);
   const base = state.drag.base;
+
+  if (state.drag.target.type === 'crop-move') {
+    const imageRect = state.drag.imageRect;
+    const deltaX = (pointerEvent.clientX - state.drag.startX) / imageRect.w;
+    const deltaY = (pointerEvent.clientY - state.drag.startY) / imageRect.h;
+    state.crop.rect = clampCropRect({
+      x: base.x + deltaX,
+      y: base.y + deltaY,
+      w: base.w,
+      h: base.h,
+    }, state.crop.ratio);
+    requestRender();
+    return;
+  }
+
+  if (state.drag.target.type === 'crop-handle') {
+    state.crop.rect = resizeCropFromHandle(position, base, state.drag.target.id, state.crop.ratio);
+    requestRender();
+    return;
+  }
 
   if (state.drag.target.id === 'pan') {
     viewport.view.panX = base.panX + (pointerEvent.clientX - state.drag.startX);
@@ -848,6 +1274,7 @@ async function loadImage(file) {
   resetButton.disabled = false;
   clearButton.disabled = false;
   updateViewButtons();
+  updateImageEditButtons();
   requestRender();
 }
 
@@ -938,6 +1365,16 @@ function bindStageEvents(targetCanvas, viewportFactory) {
       return;
     }
 
+    if (state.crop.active) {
+      const cropTarget = getCropPointerTarget(event.clientX, event.clientY, viewport);
+      if (cropTarget) {
+        setCropDragging(cropTarget, event, viewport);
+        return;
+      }
+      startPanDrag(event, viewport);
+      return;
+    }
+
     const target = getPointerTarget(event.clientX, event.clientY, viewport);
     if (target) {
       setPointerDragging(target, event, viewport);
@@ -990,6 +1427,11 @@ bindStageEvents(canvas, () => getViewport('main'));
 bindStageEvents(fullscreenCanvas, () => getViewport('fullscreen'));
 
 window.addEventListener('keydown', (event) => {
+  if (event.code === 'Escape' && state.crop.active) {
+    event.preventDefault();
+    cancelCropMode();
+    return;
+  }
   if (event.code === 'Escape' && state.fullscreen.active) {
     event.preventDefault();
     closeFullscreen();
@@ -1030,6 +1472,20 @@ clearButton.addEventListener('click', clearImage);
 fitButton.addEventListener('click', () => resetView());
 fullscreenButton.addEventListener('click', openFullscreen);
 fullscreenCloseButton.addEventListener('click', closeFullscreen);
+startCropButton.addEventListener('click', enterCropMode);
+applyCropButton.addEventListener('click', () => {
+  applyCrop().catch(() => {});
+});
+cancelCropButton.addEventListener('click', cancelCropMode);
+rotateButton.addEventListener('click', () => {
+  rotateImage90().catch(() => {});
+});
+flipHButton.addEventListener('click', () => {
+  flipImageHorizontal().catch(() => {});
+});
+flipVButton.addEventListener('click', () => {
+  flipImageVertical().catch(() => {});
+});
 
 guideWidthInput.addEventListener('input', () => {
   state.style.width = Number.parseFloat(guideWidthInput.value);
@@ -1062,4 +1518,5 @@ window.addEventListener('beforeunload', () => {
 buildOverlayControls();
 resizeCanvas();
 updateViewButtons();
+updateImageEditButtons();
 requestRender();

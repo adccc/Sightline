@@ -45,6 +45,38 @@
           </section>
 
           <section class="panel-card">
+            <h2>图片编辑</h2>
+            <div class="control-stack">
+              <label class="control-row">
+                <span>裁剪比例</span>
+                <select id="cropRatioSelect" disabled>
+                  <option value="free">自由</option>
+                  <option value="1">1:1</option>
+                  <option value="1.333333">4:3</option>
+                  <option value="0.75">3:4</option>
+                  <option value="1.777778">16:9</option>
+                  <option value="0.5625">9:16</option>
+                  <option value="1.5">3:2</option>
+                  <option value="0.666667">2:3</option>
+                </select>
+              </label>
+              <div class="button-row">
+                <button class="button" id="startCropButton" type="button" disabled>开始裁剪</button>
+              </div>
+              <div class="button-row crop-actions is-hidden" id="cropActions">
+                <button class="button button-primary" id="applyCropButton" type="button">应用裁剪</button>
+                <button class="button" id="cancelCropButton" type="button">取消</button>
+              </div>
+              <div class="button-row">
+                <button class="button" id="rotateButton" type="button" disabled>旋转 90°</button>
+                <button class="button" id="flipHButton" type="button" disabled>水平翻转</button>
+                <button class="button" id="flipVButton" type="button" disabled>垂直翻转</button>
+              </div>
+            </div>
+            <p class="small-note">裁剪时可拖动框体移动，拖角点调整范围；比例锁定后角点会保持比例。</p>
+          </section>
+
+          <section class="panel-card">
             <h2>参考线样式</h2>
             <div class="control-stack">
               <label class="control-row">
@@ -63,6 +95,7 @@
               <li>按住 Command 并滚动滚轮可缩放图片；触屏设备支持双指捏合缩放。</li>
               <li>拖动画布空白处可平移视图。</li>
               <li>全屏预览默认按图片 100% 尺寸展示，可继续缩放和平移。</li>
+              <li>图片支持按比例裁剪、90° 旋转与水平/垂直翻转。</li>
               <li>支持拖入文件，关闭页面后不会保留缓存。</li>
             </ul>
           </section>
@@ -90,6 +123,6 @@
       </div>
     </div>
 
-    <script src="./app.js?v=20260524-2"></script>
+    <script src="./app.js?v=20260524-3"></script>
   </body>
  </html>
